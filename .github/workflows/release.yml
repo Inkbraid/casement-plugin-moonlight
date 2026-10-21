@@ -1,0 +1,124 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds and tests the plugin and publishes a
+# release with the zip and its complete corresponding source, as the GPL
+# requires. GitHub's own "Source code" archives of a tag leave submodules
+# out, so the release carries two more files: this repository with its
+# submodules (moonlight-common-c with ENet and nanors), and the sources of
+# FFmpeg, Opus and OpenSSL, which are linked into the exe, together with
+# the vcpkg ports and triplet that built them.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # The vcpkg release named by builtin-baseline in vcpkg.json.
+  VCPKG_COMMIT_ID: "9eec002df1cd109f8f104cd966a763daf9751489"
+  VCPKG_TRIPLET: x64-windows-static-release
+
+jobs:
+  build:
+    name: Build (MSVC)
+    runs-on: windows-latest
+    env:
+      # Built from source, not restored from a cache: the published
+      # third-party sources are then exactly the ones this build used.
+      VCPKG_BINARY_SOURCES: "clear"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\([^)]*VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != version $version" }
+      - name: Set up vcpkg
+        shell: pwsh
+        run: |
+          $root = "$env:RUNNER_TEMP\vcpkg"
+          git init -q $root
+          git -C $root fetch -q --depth 1 https://github.com/microsoft/vcpkg.git $env:VCPKG_COMMIT_ID
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $root checkout -q FETCH_HEAD
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+      - name: Build FFmpeg, Opus and OpenSSL
+        shell: bash
+        run: |
+          root=$(cygpath -m "$VCPKG_ROOT")
+          "$root/vcpkg" install --triplet "$VCPKG_TRIPLET" --x-install-root="$root/installed"
+      - name: Configure
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_ROOT -replace '\\', '/'
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" `
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET" `
+            "-DVCPKG_INSTALLED_DIR=$root/installed" -DVCPKG_MANIFEST_INSTALL=OFF
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure -L unit
+      - name: Package
+        shell: bash
+        run: ci/package.sh build "$(cygpath -m "$VCPKG_ROOT")/installed/$VCPKG_TRIPLET" dist
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/moonlight -DestinationPath "casement-moonlight-${{ github.ref_name }}-windows-x64.zip"
+      - name: Third-party sources
+        shell: bash
+        run: |
+          root=$(cygpath -m "$VCPKG_ROOT")
+          name="casement-moonlight-$GITHUB_REF_NAME-third-party-sources"
+          mkdir -p "$name/vcpkg/ports" "$name/vcpkg/triplets"
+          cp "$root"/downloads/ffmpeg-ffmpeg-*.tar.gz "$root"/downloads/xiph-opus-*.tar.gz \
+            "$root"/downloads/openssl-openssl-*.tar.gz "$name/"
+          for port in ffmpeg opus openssl; do cp -r "$root/ports/$port" "$name/vcpkg/ports/"; done
+          cp "$root/triplets/community/$VCPKG_TRIPLET.cmake" "$name/vcpkg/triplets/"
+          {
+            echo "The sources of the libraries linked into casement-moonlight.exe $GITHUB_REF_NAME,"
+            echo "as vcpkg $VCPKG_COMMIT_ID (https://github.com/microsoft/vcpkg) downloaded"
+            echo "them, and the vcpkg ports (build scripts and patches) and triplet that built"
+            echo "them: \"vcpkg install --triplet $VCPKG_TRIPLET\" in the plugin's source folder,"
+            echo "with vcpkg.json from there."
+          } > "$name/README.txt"
+          tar -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            casement-moonlight-*-windows-x64.zip
+            casement-moonlight-*-third-party-sources.tar.gz
+
+  source:
+    name: Source with submodules
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Archive
+        run: ci/source-archive.sh "casement-moonlight-$GITHUB_REF_NAME-source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source
+          path: casement-moonlight-*-source.tar.gz
+
+  publish:
+    name: Publish
+    needs: [build, source]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch or pull request replaces a running check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The vcpkg release named by builtin-baseline in vcpkg.json; keep the two
+  # in step.
+  VCPKG_COMMIT_ID: "9eec002df1cd109f8f104cd966a763daf9751489"
+  VCPKG_TRIPLET: x64-windows-static-release
+  # vcpkg removed its GitHub Actions cache backend; built packages are kept
+  # in a folder that actions/cache saves instead.
+  VCPKG_BINARY_SOURCES: "clear;files,C:\\vcpkg-binary-cache,readwrite"
+
+jobs:
+  windows:
+    name: Windows build (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Cache the built libraries
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ env.VCPKG_COMMIT_ID }}-
+      - name: Set up vcpkg
+        shell: pwsh
+        run: |
+          $root = "$env:RUNNER_TEMP\vcpkg"
+          git init -q $root
+          git -C $root fetch -q --depth 1 https://github.com/microsoft/vcpkg.git $env:VCPKG_COMMIT_ID
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git -C $root checkout -q FETCH_HEAD
+          & "$root\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+      - name: Build FFmpeg, Opus and OpenSSL
+        shell: bash
+        run: |
+          mkdir -p /c/vcpkg-binary-cache
+          root=$(cygpath -m "$VCPKG_ROOT")
+          if ! "$root/vcpkg" install --triplet "$VCPKG_TRIPLET" --x-install-root="$root/installed"; then
+            find "$root/buildtrees" -name "*.log" -exec sh -c 'echo "== $1"; tail -n 50 "$1"' _ {} \;
+            exit 1
+          fi
+      - name: Configure
+        shell: pwsh
+        run: |
+          $root = $env:VCPKG_ROOT -replace '\\', '/'
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" `
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET" `
+            "-DVCPKG_INSTALLED_DIR=$root/installed" -DVCPKG_MANIFEST_INSTALL=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure -L unit
+      - name: Package
+        shell: bash
+        run: ci/package.sh build "$(cygpath -m "$VCPKG_ROOT")/installed/$VCPKG_TRIPLET" dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: casement-moonlight-windows-x64
+          path: dist/
+
+  linux:
+    name: Cross build and end-to-end tests (MinGW, Wine, Sunshine)
+    runs-on: ubuntu-24.04
+    env:
+      # A new Wine prefix doesn't offer to install Mono and Gecko.
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Tools
+        run: |
+          sudo apt-get update
+          # wine64 alone has no wine command: that comes from the wine package.
+          sudo apt-get install -y --no-install-recommends mingw-w64 wine64 wine ninja-build cmake nasm pkg-config
+      - name: Restore third-party builds
+        uses: actions/cache@v4
+        with:
+          path: ~/mingw64
+          key: mingw64-${{ hashFiles('ci/mingw-deps.sh') }}
+      - name: Third-party libraries
+        run: ci/mingw-deps.sh ~/mingw64 openssl opus ffmpeg
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DCMAKE_PREFIX_PATH=$HOME/mingw64
+      - name: Build
+        run: cmake --build build
+      - name: Wine prefix
+        env:
+          WINEDEBUG: -all
+        # Created up front rather than inside the first test's time limit.
+        run: wineboot --init && wineserver --wait
+      - name: Unit tests
+        env:
+          WINEDEBUG: -all
+        run: ctest --test-dir build --output-on-failure -L unit
+      - name: End-to-end tests
+        env:
+          WINEDEBUG: -all
+          CASEMENT_E2E: "1"
+        run: ci/e2e.sh build
+      - name: Keep the end-to-end logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: build/e2e-logs/
+          if-no-files-found: ignore
