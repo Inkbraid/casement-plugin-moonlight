@@ -20,13 +20,15 @@ find_package(OpenSSL 3.0 REQUIRED)
 add_library(pugixml STATIC third_party/pugixml/pugixml.cpp)
 target_include_directories(pugixml SYSTEM PUBLIC third_party/pugixml)
 
-# Everything but the stream itself: options, keys, the control API and
-# the data folder. The unit tests link this.
+# Everything but the stream itself: options, keys, the control API,
+# pairing and the data folder. The unit tests link this.
 add_library(moonlight_core STATIC
     src/moonlight/http.cpp
     src/moonlight/identity.cpp
     src/moonlight/keymap.cpp
+    src/moonlight/nvhttp.cpp
     src/moonlight/options.cpp
+    src/moonlight/pairing.cpp
     src/moonlight/xml.cpp)
 target_include_directories(moonlight_core PUBLIC src)
 target_link_libraries(moonlight_core PUBLIC casement pugixml OpenSSL::SSL OpenSSL::Crypto
@@ -37,6 +39,8 @@ casement_test(unit_tests unit
     tests/unit/http_tests.cpp
     tests/unit/identity_tests.cpp
     tests/unit/keymap_tests.cpp
+    tests/unit/nvhttp_tests.cpp
     tests/unit/options_tests.cpp
+    tests/unit/pairing_tests.cpp
     tests/unit/xml_tests.cpp)
 target_link_libraries(unit_tests PRIVATE moonlight_core)
