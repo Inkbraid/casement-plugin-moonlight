@@ -97,3 +97,10 @@ casement_test(unit_tests unit
     tests/unit/pairing_tests.cpp
     tests/unit/xml_tests.cpp)
 target_link_libraries(unit_tests PRIVATE moonlight_core)
+
+casement_test(e2e_tests e2e tests/e2e/moonlight_tests.cpp)
+target_link_libraries(e2e_tests PRIVATE casement_sim moonlight_core)
+target_compile_definitions(e2e_tests PRIVATE PLUGIN_EXE=L"$<TARGET_FILE_NAME:casement-moonlight>")
+add_dependencies(e2e_tests casement-moonlight)
+# The end-to-end tests drive a real host: give them time.
+set_tests_properties(e2e_tests PROPERTIES TIMEOUT 900)
