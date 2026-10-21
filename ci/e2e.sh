@@ -27,9 +27,11 @@ PIDS=()
 log() { echo "e2e: $*" >&2; }
 
 cleanup() {
-    local status=$?
-    for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
-    for pid in "${PIDS[@]}"; do
+    local status=$? i pid
+    # Last started first: Sunshine stops while its screen and sound exist.
+    for ((i = ${#PIDS[@]} - 1; i >= 0; i--)); do
+        pid=${PIDS[i]}
+        kill "$pid" 2>/dev/null || continue
         for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
         kill -9 "$pid" 2>/dev/null || true
     done
