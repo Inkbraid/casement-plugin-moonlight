@@ -1,0 +1,32 @@
+{
+  "format": "casement-plugin",
+  "version": 1,
+  "id": "moonlight",
+  "name": "Moonlight",
+  "description": "Game and desktop streaming from Sunshine hosts",
+  "icon": "icon.png",
+  "program": "casement-moonlight.exe",
+  "homepage": "https://github.com/Inkbraid/casement-plugin-moonlight",
+  "capabilities": ["cursor", "audio"],
+  "connections": [
+    {
+      "scheme": "moonlight",
+      "name": "Moonlight (Sunshine)",
+      "fields": [
+        { "name": "host", "label": "Host", "part": "host", "type": "text", "required": true, "placeholder": "gaming-pc.lan" },
+        { "name": "port", "label": "HTTP port", "part": "port", "type": "number", "placeholder": "47989" },
+        { "name": "app", "label": "App", "part": "path", "type": "text", "default": "Desktop" },
+        { "name": "res", "label": "Resolution", "part": "query", "type": "choice", "default": "window",
+          "choices": [ { "value": "window", "label": "Window size" }, { "value": "1920x1080", "label": "1920×1080" },
+                       { "value": "2560x1440", "label": "2560×1440" }, { "value": "3840x2160", "label": "3840×2160" } ] },
+        { "name": "fps", "label": "Frame rate", "part": "query", "type": "choice", "default": "60",
+          "choices": [ { "value": "30", "label": "30" }, { "value": "60", "label": "60" }, { "value": "120", "label": "120" } ] },
+        { "name": "bitrate", "label": "Bitrate (kbit/s)", "part": "query", "type": "number", "placeholder": "20000" },
+        { "name": "codec", "label": "Codec", "part": "query", "type": "choice", "default": "auto",
+          "choices": [ { "value": "auto", "label": "Automatic" }, { "value": "h264", "label": "H.264" },
+                       { "value": "hevc", "label": "HEVC" }, { "value": "av1", "label": "AV1" } ] },
+        { "name": "quit", "label": "Quit the app on disconnect", "part": "query", "type": "flag" }
+      ]
+    }
+  ]
+}
